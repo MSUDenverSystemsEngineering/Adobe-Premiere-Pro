@@ -150,13 +150,81 @@ Try {
         Show-InstallationProgress
 
         ## <Perform Pre-Installation tasks here>
-		Remove-File -Path "$envCommonProgramFilesX86\Adobe\OOBE\PDApp\*" -Recurse -ContinueOnError $true
-		If (-not ($envOSVersion -like "10.0*")) {
-			Install-MSUpdates -Directory "$dirSupportFiles\$envOSVersionMajor.$envOSVersionMinor"
-		}
-				$exitCode = Execute-Process -Path "$dirSupportFiles\AdobeCCUninstaller.exe" -WindowStyle "Hidden" -PassThru
-				If (($exitCode.ExitCode -ne "0") -and ($mainExitCode -ne "3010")) { $mainExitCode = $exitCode.ExitCode }
+        $applicationList = 'Premiere Pro','Creative Cloud'
+		ForEach($installedApplication in $applicationList) {
+			$installedApplicationList = Get-InstalledApplication -Name $installedApplication
+			ForEach($application in $installedApplicationList) {
+				$application
+				if($application.UninstallString) {
+					Write-Log -Message "Uninstall string: $($application.UninstallString)" -Source 'Pre-Installation' -LogType 'CMTrace'
+					Write-Log -Message "Uninstall subkey: $($application.UninstallSubkey)" -Source 'Pre-Installation' -LogType 'CMTrace'
+					## First, we want to check if the program was installed with a package. If it was, then we simply run the MSI uninstaller.
+					if($application.UninstallString.contains("MsiExec.exe") -and ($application.UninstallSubkey)) {
+						## You might get exit code 1603 if the packaged apps were uninstalled without using the MSI uninstaller.
+						## The MSI uninstaller will try to run, see that there are no apps to uninstall, and fail with exit code 1603.
+						## The only way to remove the package is to reinstall the package and then uninstall it with the MSI uninstaller.
+						## You might also be able to do a manual cleanup of leftover files, directories, and or reg keys.
+						Write-Log -Message "Attempting to run uninstaller..." -Source 'Pre-Installation' -LogType 'CMTrace'
+						$exitCode = Execute-Process -Path "MsiExec.exe" -Parameters "/x$($application.UninstallSubkey) /q" -WindowStyle "Hidden"-IgnoreExitCodes '1603' -PassThru
+						If (($exitCode.ExitCode -ne "0") -and ($mainExitCode -ne "3010")) { $mainExitCode = $exitCode.ExitCode }
+					}
+					## If the application wasn't installed with a package, we'll to check to see if it uses the standard Adobe uninstaller. If it does, we're in luck.
+					## Unfortunately, we can't run it as is because the standard Adobe uninstaller requires user interaction. However, it does give us everything we need to do a silent uninstall.
+					## The full uninstall string provided by Get-InstalledApplication will look something like this:
+					## C:\Program Files (x86)\Common Files\Adobe\Adobe Desktop Common\HDBox\Uninstaller.exe" --uninstall=1 --sapCode=ILST --productVersion=26.3.1 --productPlatform=win64 --productAdobeCode={ILST-26.3.1-64-ADBEADBEADBEADBEADBEA} --productName="Illustrator" --mode=0
+					## First, we separate out the options into individual strings using split and then remove everything except the value using trim.
+					ElseIf($application.UninstallString.contains("${Env:ProgramFiles(x86)}\Common Files\Adobe\Adobe Desktop Common\HDBox\Uninstaller.exe")) {
+						$substringArray = $application.UninstallString -split " --"
+						ForEach($item in $substringArray) {
+							if($item.contains("sapCode=")) {
+								$sapCode = $item.trim("sapCode=")
+							}
+							elseif($item.contains("productVersion=")) {
+								$productVersion = $item.trim("productVersion=")
+								$pointValues = $productVersion.split('.')
+								$baseVersion = $pointValues[0]
+							}
+							elseif($item.contains("productPlatform=")) {
+								$productPlatform = $item.trim("productPlatform=")
+							}
+						}
+						## This next part is a little messy. We can't just pass the $productVersion into the uninstaller below because the uninstaller is expecting the base version of the application so it knows what to uninstall.
+						## To get around that, we have to compare the installed version against a list of base versions that Adobe provides as an xml file.
+						## If you look above, you'll see that we take our $productVersion and pare it down to $baseVersion. In other words, 25.4.6 becomes 25.
+						## Unfortunately, we can't pass that directly, because the base version could be 25.0 or even 25.0.0. So now, we compare our 25 to the product version contained in our xml file.
+						## Conceivably, you could get 13.0.25 instead of 25.0.0, so we want to make sure that 25 shows up at the beginning of the version number. We perform a wildcard comparision  using * to see if 25 matches 25.0 in the XML file.
+						[xml]$xmlAdobeCCUninstallerConfig = Get-Content -Path "$dirFiles\AdobeCCUninstallerConfig.xml"
+						$xmlAdobeCCUninstallerConfig.CCPUninstallXML.UninstallInfo.RIBS.Products.Product | Where-Object {$_.SapCode -eq $sapCode -and $_.Version -like "$baseVersion*"} |  ForEach-Object {
+							Write-Log -Message "$($_.SapCode), $($_.Version)" -Source 'Pre-Installation' -LogType 'CMTrace'
+							If ( Test-Path "${Env:ProgramFiles(x86)}\Common Files\Adobe\Adobe Desktop Common\HDBox\Setup.exe") {
+								$exitCode = Execute-Process -Path "${Env:ProgramFiles(x86)}\Common Files\Adobe\Adobe Desktop Common\HDBox\Setup.exe" -Parameters "--uninstall=1 --sapCode=$($_.SapCode) --baseVersion=$($_.Version) --platform=$($_.Platform) --deleteUserPreferences=false" -WindowStyle "Hidden" -IgnoreExitCodes '33,135' -PassThru
+								If (($exitCode.ExitCode -ne "0") -and ($mainExitCode -ne "3010")) { $mainExitCode = $exitCode.ExitCode }
+							}
+						}
+						$xmlAdobeCCUninstallerConfig.CCPUninstallXML.UninstallInfo.HD.Products.Product | Where-Object {$_.SapCode -eq $sapCode -and $_.BaseVersion -like "$baseVersion*"} |  ForEach-Object {
+							Write-Log -Message "$($_.SapCode), $($_.BaseVersion)" -Source 'Pre-Installation' -LogType 'CMTrace'
+							If ( Test-Path "${Env:ProgramFiles(x86)}\Common Files\Adobe\Adobe Desktop Common\HDBox\Setup.exe") {
+								$exitCode = Execute-Process -Path "${Env:ProgramFiles(x86)}\Common Files\Adobe\Adobe Desktop Common\HDBox\Setup.exe" -Parameters "--uninstall=1 --sapCode=$($_.SapCode) --baseVersion=$($_.BaseVersion) --platform=$($_.Platform) --deleteUserPreferences=false" -WindowStyle "Hidden" -IgnoreExitCodes '33,135' -PassThru
+								If (($exitCode.ExitCode -ne "0") -and ($mainExitCode -ne "3010")) { $mainExitCode = $exitCode.ExitCode }
+							}
+						}
+					}
+					ElseIf($application.UninstallString.contains("${Env:ProgramFiles(x86)}\Adobe\Adobe Creative Cloud\Utils\Creative Cloud Uninstaller.exe")) {
+						Write-Log -Message "Attempting to run uninstaller..." -Source 'Pre-Installation' -LogType 'CMTrace'
+						Write-Log -Message "Note: Creative Cloud can not be uninstalled if there are Creative Cloud applications installed that require it." -Source 'Pre-Installation' -LogType 'CMTrace'
+						$exitCode = Execute-Process -Path "${Env:ProgramFiles(x86)}\Adobe\Adobe Creative Cloud\Utils\Creative Cloud Uninstaller.exe" -Parameters "-u" -WindowStyle "Hidden" -PassThru
+						If (($exitCode.ExitCode -ne "0") -and ($mainExitCode -ne "3010")) { $mainExitCode = $exitCode.ExitCode }
+					}
+					Else {
+						Write-Log -Message "The uninstall string returned was not expected." -Source 'Pre-Installation' -LogType 'CMTrace'
+					}
+				}
+				Else {
+					Write-Log -Message "A program was detected but a valid uninstall string and or subkey could not be found." -Source 'Pre-Installation' -LogType 'CMTrace'
 
+				}
+			}
+		}
         ##*===============================================
         ##* INSTALLATION
         ##*===============================================
@@ -299,8 +367,8 @@ Catch {
 # SIG # Begin signature block
 # MIImVAYJKoZIhvcNAQcCoIImRTCCJkECAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCABOauP5+Fm5F31
-# 0JZ1jdAZQdzbLpU3KFChw4wFyocm3KCCH8AwggVvMIIEV6ADAgECAhBI/JO0YFWU
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAAhp4uX4mic/c7
+# VnLZEgmvavHwxhn56aUIPf3lLTL+IqCCH8AwggVvMIIEV6ADAgECAhBI/JO0YFWU
 # jTanyYqJ1pQWMA0GCSqGSIb3DQEBDAUAMHsxCzAJBgNVBAYTAkdCMRswGQYDVQQI
 # DBJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAOBgNVBAcMB1NhbGZvcmQxGjAYBgNVBAoM
 # EUNvbW9kbyBDQSBMaW1pdGVkMSEwHwYDVQQDDBhBQUEgQ2VydGlmaWNhdGUgU2Vy
@@ -474,32 +542,32 @@ Catch {
 # MSswKQYDVQQDEyJTZWN0aWdvIFB1YmxpYyBDb2RlIFNpZ25pbmcgQ0EgUjM2AhEA
 # pU3fcPvc8UxUgrjysXLKMTANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3AgEM
 # MQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisGAQQB
-# gjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCDsrKzvx6Zdxzkx
-# Oc0/5luQFH7oohIgZt63UU0vWTrr/DANBgkqhkiG9w0BAQEFAASCAYAqQYgGWSXy
-# Facn/HWOLEqpAeZZCK0g7DFBZTj0R8Bm2erU0HVjDvZbOJOrnkIvmXxvL7+uYl7h
-# Y6tHQBID9jjX9cF6oe8yY0rF1EVxnga6ZJS2aBQCJJzUkykKsAt0ogLqmb3GUoyo
-# sDfU7KRdhdzs0Vd+UmXX0T/chfws8AjJK1Nbyc0KJGfoSvOqyzdx5PQMr/FrzNV2
-# 6KL0A5gWdYapQpl/BNs5y10LE0WVTMCjzGdGbnTmxrC0kklbcafjWj+jovAezurA
-# d99WbeXqKveIfOf7hbZQxZ9fNZkJLYHqL/tEpn3OFoxW/dAEHsxsiQotgtYv0Y7P
-# CotKshOulYNxYwiXULLnc1ffO+9rLtY/E5KOeDuPPXYpJ6MaB+GhxGuJQBmad8vz
-# 2PeAsxaE+0wYnhJwZNEhmymZDRTFsVvCYTSrwKluM7Xj0cXXPPyYAMyF6gIEAsdI
-# ozbYNsA23ftVI6a1UaXwwoT3qFkvz+spbXl+S8Is0qqDDTuaUkAKhO6hggNLMIID
+# gjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCDpMvE0zvzaohT+
+# UzPgsWKrZg4rq51Q6Zj4m2kfknSNRTANBgkqhkiG9w0BAQEFAASCAYClQcfwabS5
+# QrYly96a9TbiakEciwzDUiq36s7nGddXmKqON1y4yeASJMvUw0qUjSH9QnsGVVnA
+# bAUOUwMT4PU6N+PaxqYXoqbIjvKgK/0spTtg7Btoyl7qhweJRIXD3FOIau6s8oWc
+# fQCexKqQ1DH2WtMKi/fSXNhzBC+/FaYuYyJbiPl26Lk1WVd3c1iBWRgGTcov7gYA
+# bDVbzgzf/eVzAvapHyx4l3zrYsGgBSzOHOObCSEa7QbVaClJplWOlBKlPKN6dahM
+# EhC3tv7j4iFf9/BWGIKW4R352MFwYDe3UoOpJdnLBPltSLwIEu0Ggx8iat/r+t1a
+# 20dKAwyCUG26tiakzT7v/DHOhcVGd6g9dRqbkzFM6kL5LPM1/QcdX1sWH4pW+DTk
+# 4NRhuKnu85jlYZagErjv4zgnzop0XPulFjMzU0Ldl2QJwSSuHqeTp5LUSthNidsx
+# iEH1f1lCwc0rwFzR5CyJfxaIyVmGKJ3M/CX0RuLHKM0mczk43xz5LJGhggNLMIID
 # RwYJKoZIhvcNAQkGMYIDODCCAzQCAQEwgZEwfTELMAkGA1UEBhMCR0IxGzAZBgNV
 # BAgTEkdyZWF0ZXIgTWFuY2hlc3RlcjEQMA4GA1UEBxMHU2FsZm9yZDEYMBYGA1UE
 # ChMPU2VjdGlnbyBMaW1pdGVkMSUwIwYDVQQDExxTZWN0aWdvIFJTQSBUaW1lIFN0
 # YW1waW5nIENBAhA5TCXhfKBtJ6hl4jvZHSLUMA0GCWCGSAFlAwQCAgUAoHkwGAYJ
-# KoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUxDxcNMjMwODMwMTkx
-# NDI5WjA/BgkqhkiG9w0BCQQxMgQws8eTCSZAVg4DLKrsTLMtcUSw1Qo1e2set4mS
-# mcifn5w92IS22RYQGnv0EiGxH3dCMA0GCSqGSIb3DQEBAQUABIICADYaw+RKWWqg
-# /N9GtlSGK7Z0pPPGW6bf7PAMJCCJyRne4VyUh7uZK7/mkPkk/M0I2WFbbR+5eETA
-# aBG8AkQz/xqPSJs7O8Dwi19eyd0sxYPoK/cd/rUCrMFJpkb2bd/t7/pkHaGobYR1
-# 5AF6C+8xY8PMV8HjJsyrOIOl7aIWuRLDHaHU9la2yUcbm2XrPu0vGIozcF9wHk+v
-# z9lM32QjzfaaR9hwZLddpEehK7a9vlINR7b+Zp/ruWAlrURDKxUa/IkN8fBGQzhf
-# srYIhGGKHxuimPz4o7hMpSuvVLOwPGdFIclmGmZvSzw9jC+EHsvfvCkdUiEYOAti
-# bRevefDf0lXR9YV8QaaVq9RCRffDBb6KuxRGKSDAPVC4kXLzXN5l7CHwF5iuAL4r
-# ScJ+C4PIazgySvoaLwYYTKfeKvuRXr+pp41ASFQKimN+wxSEkK4Pnp/bAbXSXkRS
-# Xy64c4I1Qc60c3RXMxpOwdASi3E6ayi1y8OjEtGgMoB+7FeKCDmYJNamz9TH4j4j
-# GYna3uheXDMCPTROmfF1m1h8PU78tk2ruJJnJFVwb8x3ARshuxQ6vlRJDqTirWo0
-# sdvrn1VL6JKgn8bpkUqARy9pZPXMIBZuFDtq73RXAtLeIkIMg7WPwtszqUOj4gj4
-# YV/jd5akjOO+nOPb/yeGDdRoZzJr4YeX
+# KoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUxDxcNMjMwOTA1MjIx
+# NTEwWjA/BgkqhkiG9w0BCQQxMgQwBCevHCQIs2raLkJEjqalIAJxfKKwqeN7BUxT
+# Z2UWrsHVr5JHw5nkxyiDu8Cfn831MA0GCSqGSIb3DQEBAQUABIICAHlOIXwt6xC5
+# r7biYACU+9CongAmCUap+6APA5ZMmfTbL+fpX7BfyECqmOqytqYiVCBfwL5wm+ee
+# nxi24yISYD24a9mrpDgrnKZ7Jry7+falDf1lqdX6SYY9e+VotC1/F6JQQW72/Lo3
+# lEKJnC+kSYd37peYgACxdrNu8711GA5Q9mFGYaPH70QDZAQ5SJUNoq2weoUdloXu
+# nJAQY2D1HLErSAUzbvgz7tmKU+FFq9eBR+oQEt4mWB0eiFAjIGCXyd7t2mLS5qSe
+# YlUzuBHBXtADSCUQajezIKy6SdJtxl0Zo7pIWZv1phUNF9PAvPdNITDRzrTndh0N
+# H4XyU7fIwzBNdX4SGatMQoS90SzkF80chFB8kRiQ8whX9/9kqVMk0feB8apapi/x
+# nuCplEl5QiIqEbOuqppQQAVtd/7QK/MTJ4iwvj3vMGURlI4OXIhzAKNoScRh+pL+
+# WJLBLieBY3EIpuqIDwBph2B0LO3Y9Sj9/jllYwMpfaxH2E7Ad8uUwrQ3TODps3cw
+# 5wyjRWa15wg17EMqPV40DuaUsPNliwYG+iNWZilaqlG/9eXPNIaTBVlBczSdfq/7
+# l566t4tmD4yeP96ZS1t3BgFY74EANDmMTwPQ64+Mf03NDUAzu6bwIXEEG/kWD6kj
+# +/SbmMOHDVC5+g2/n5/I3B2oIYCNEII8
 # SIG # End signature block
