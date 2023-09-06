@@ -1,156 +1,134 @@
 ﻿<#
 .SYNOPSIS
-PSApppDeployToolkit - This script performs the installation or uninstallation of an application(s).
+	This script performs the installation or uninstallation of an application(s).
+	# LICENSE #
+	PowerShell App Deployment Toolkit - Provides a set of functions to perform common application deployment tasks on Windows.
+	Copyright (C) 2017 - Sean Lillis, Dan Cunningham, Muhammad Mashwani, Aman Motazedian.
+	This program is free software: you can redistribute it and/or modify it under the terms of the GNU Lesser General Public License as published by the Free Software Foundation, either version 3 of the License, or any later version. This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+	You should have received a copy of the GNU Lesser General Public License along with this program. If not, see <http://www.gnu.org/licenses/>.
 .DESCRIPTION
-- The script is provided as a template to perform an install or uninstall of an application(s).
-- The script either performs an "Install" deployment type or an "Uninstall" deployment type.
-- The install deployment type is broken down into 3 main sections/phases: Pre-Install, Install, and Post-Install.
-The script dot-sources the AppDeployToolkitMain.ps1 script which contains the logic and functions required to install or uninstall an application.
-PSApppDeployToolkit is licensed under the GNU LGPLv3 License - (C) 2023 PSAppDeployToolkit Team (Sean Lillis, Dan Cunningham and Muhammad Mashwani).
-This program is free software: you can redistribute it and/or modify it under the terms of the GNU Lesser General Public License as published by the
-Free Software Foundation, either version 3 of the License, or any later version. This program is distributed in the hope that it will be useful, but
-WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
-for more details. You should have received a copy of the GNU Lesser General Public License along with this program. If not, see <http://www.gnu.org/licenses/>.
+	The script is provided as a template to perform an install or uninstall of an application(s).
+	The script either performs an "Install" deployment type or an "Uninstall" deployment type.
+	The install deployment type is broken down into 3 main sections/phases: Pre-Install, Install, and Post-Install.
+	The script dot-sources the AppDeployToolkitMain.ps1 script which contains the logic and functions required to install or uninstall an application.
 .PARAMETER DeploymentType
-The type of deployment to perform. Default is: Install.
+	The type of deployment to perform. Default is: Install.
 .PARAMETER DeployMode
-Specifies whether the installation should be run in Interactive, Silent, or NonInteractive mode. Default is: Interactive. Options: Interactive = Shows dialogs, Silent = No dialogs, NonInteractive = Very silent, i.e. no blocking apps. NonInteractive mode is automatically set if it is detected that the process is not user interactive.
+	Specifies whether the installation should be run in Interactive, Silent, or NonInteractive mode. Default is: Interactive. Options: Interactive = Shows dialogs, Silent = No dialogs, NonInteractive = Very silent, i.e. no blocking apps. NonInteractive mode is automatically set if it is detected that the process is not user interactive.
 .PARAMETER AllowRebootPassThru
-Allows the 3010 return code (requires restart) to be passed back to the parent process (e.g. SCCM) if detected from an installation. If 3010 is passed back to SCCM, a reboot prompt will be triggered.
+	Allows the 3010 return code (requires restart) to be passed back to the parent process (e.g. SCCM) if detected from an installation. If 3010 is passed back to SCCM, a reboot prompt will be triggered.
 .PARAMETER TerminalServerMode
-Changes to "user install mode" and back to "user execute mode" for installing/uninstalling applications for Remote Desktop Session Hosts/Citrix servers.
+	Changes to "user install mode" and back to "user execute mode" for installing/uninstalling applications for Remote Destkop Session Hosts/Citrix servers.
 .PARAMETER DisableLogging
-Disables logging to file for the script. Default is: $false.
+	Disables logging to file for the script. Default is: $false.
 .EXAMPLE
-powershell.exe -Command "& { & '.\Deploy-Application.ps1' -DeployMode 'Silent'; Exit $LastExitCode }"
+    powershell.exe -Command "& { & '.\Deploy-Application.ps1' -DeployMode 'Silent'; Exit $LastExitCode }"
 .EXAMPLE
-powershell.exe -Command "& { & '.\Deploy-Application.ps1' -AllowRebootPassThru; Exit $LastExitCode }"
+    powershell.exe -Command "& { & '.\Deploy-Application.ps1' -AllowRebootPassThru; Exit $LastExitCode }"
 .EXAMPLE
-powershell.exe -Command "& { & '.\Deploy-Application.ps1' -DeploymentType 'Uninstall'; Exit $LastExitCode }"
+    powershell.exe -Command "& { & '.\Deploy-Application.ps1' -DeploymentType 'Uninstall'; Exit $LastExitCode }"
 .EXAMPLE
-Deploy-Application.exe -DeploymentType "Install" -DeployMode "Silent"
-.INPUTS
-None
-You cannot pipe objects to this script.
-.OUTPUTS
-None
-This script does not generate any output.
+    Deploy-Application.exe -DeploymentType "Install" -DeployMode "Silent"
 .NOTES
-Toolkit Exit Code Ranges:
-- 60000 - 68999: Reserved for built-in exit codes in Deploy-Application.ps1, Deploy-Application.exe, and AppDeployToolkitMain.ps1
-- 69000 - 69999: Recommended for user customized exit codes in Deploy-Application.ps1
-- 70000 - 79999: Recommended for user customized exit codes in AppDeployToolkitExtensions.ps1
-ZERO-TOUCH MSI: To perform Zero-Touch MSI install, leave $appName blank
+	Toolkit Exit Code Ranges:
+	60000 - 68999: Reserved for built-in exit codes in Deploy-Application.ps1, Deploy-Application.exe, and AppDeployToolkitMain.ps1
+	69000 - 69999: Recommended for user customized exit codes in Deploy-Application.ps1
+	70000 - 79999: Recommended for user customized exit codes in AppDeployToolkitExtensions.ps1
 .LINK
-https://psappdeploytoolkit.com
+	http://psappdeploytoolkit.com
 #>
 
+## Suppress PSScriptAnalyzer errors for not using declared variables during AppVeyor build
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute("PSUseDeclaredVarsMoreThanAssignments", "", Justification="Suppress AppVeyor errors on unused variables below")]
 
 [CmdletBinding()]
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute("PSUseDeclaredVarsMoreThanAssignments", "", Justification="Suppress AppVeyor errors on unused variables below")]
 Param (
-    [Parameter(Mandatory = $false)]
-    [ValidateSet('Install', 'Uninstall', 'Repair')]
-    [String]$DeploymentType = 'Install',
-    [Parameter(Mandatory = $false)]
-    [ValidateSet('Interactive', 'Silent', 'NonInteractive')]
-    [String]$DeployMode = 'Interactive',
-    [Parameter(Mandatory = $false)]
-    [switch]$AllowRebootPassThru = $false,
-    [Parameter(Mandatory = $false)]
-    [switch]$TerminalServerMode = $false,
-    [Parameter(Mandatory = $false)]
-    [switch]$DisableLogging = $false
+	[Parameter(Mandatory=$false)]
+	[ValidateSet('Install','Uninstall','Repair')]
+	[string]$DeploymentType = 'Install',
+	[Parameter(Mandatory=$false)]
+	[ValidateSet('Interactive','Silent','NonInteractive')]
+	[string]$DeployMode = 'Interactive',
+	[Parameter(Mandatory=$false)]
+	[switch]$AllowRebootPassThru = $false,
+	[Parameter(Mandatory=$false)]
+	[switch]$TerminalServerMode = $false,
+	[Parameter(Mandatory=$false)]
+	[switch]$DisableLogging = $false
 )
 
 Try {
+	## Set the script execution policy for this process
+	Try { Set-ExecutionPolicy -ExecutionPolicy 'ByPass' -Scope 'Process' -Force -ErrorAction 'Stop' } Catch { Write-Error "Failed to set the execution policy to Bypass for this process." }
 
-    ##*===============================================
-    ##* VARIABLE DECLARATION
-    ##*===============================================
-    ## Variables: Application
-    [string]$appVendor = 'Adobe'
-    [string]$appName = 'Premiere Pro'
-    [string]$appVersion = '2023'
-    [string]$appArch = 'x64'
-    [string]$appLang = 'EN'
-    [string]$appRevision = '01'
-    [string]$appScriptVersion = '1.0.0'
-    [string]$appScriptDate = '08/30/2023'
-    [string]$appScriptAuthor = 'Will Jarvill'
-    ##*===============================================
-    ## Variables: Install Titles (Only set here to override defaults set by the toolkit)
-    [string]$installName = ''
-    [string]$installTitle = ''
+	##*===============================================
+	##* VARIABLE DECLARATION
+	##*===============================================
+	## Variables: Application
+	[string]$appVendor = 'Adobe'
+	[string]$appName = 'Premiere Pro'
+	[string]$appVersion = '2023'
+	[string]$appArch = 'x64'
+	[string]$appLang = 'EN'
+	[string]$appRevision = '01'
+	[string]$appScriptVersion = '1.0.0'
+	[string]$appScriptDate = '09/06/2023'
+	[string]$appScriptAuthor = 'Will Jarvill'
+	##*===============================================
+	## Variables: Install Titles (Only set here to override defaults set by the toolkit)
+	[string]$installName = ''
+	[string]$installTitle = ''
 
-    ##* Do not modify section below
-    #region DoNotModify
+	##* Do not modify section below
+	#region DoNotModify
 
-    ## Variables: Exit Code
-    [Int32]$mainExitCode = 0
+	## Variables: Exit Code
+	[int32]$mainExitCode = 0
 
-    ## Variables: Script
-    [String]$deployAppScriptFriendlyName = 'Deploy Application'
-    [version]$deployAppScriptVersion = [Version]'3.9.2'
-    [string]$deployAppScriptDate = '02/02/2023'
-    [hashtable]$deployAppScriptParameters = $PsBoundParameters
+	## Variables: Script
+	[string]$deployAppScriptFriendlyName = 'Deploy Application'
+	[version]$deployAppScriptVersion = [version]'3.8.4'
+	[string]$deployAppScriptDate = '26/01/2021'
+	[hashtable]$deployAppScriptParameters = $psBoundParameters
 
-    ## Variables: Environment
-    If (Test-Path -LiteralPath 'variable:HostInvocation') {
-        $InvocationInfo = $HostInvocation
-    }
-    Else {
-        $InvocationInfo = $MyInvocation
-    }
-    [String]$scriptDirectory = Split-Path -Path $InvocationInfo.MyCommand.Definition -Parent
+	## Variables: Environment
+	If (Test-Path -LiteralPath 'variable:HostInvocation') { $InvocationInfo = $HostInvocation } Else { $InvocationInfo = $MyInvocation }
+	[string]$scriptDirectory = Split-Path -Path $InvocationInfo.MyCommand.Definition -Parent
 
-    ## Dot source the required App Deploy Toolkit Functions
-    Try {
-        [String]$moduleAppDeployToolkitMain = "$scriptDirectory\AppDeployToolkit\AppDeployToolkitMain.ps1"
-        If (-not (Test-Path -LiteralPath $moduleAppDeployToolkitMain -PathType 'Leaf')) {
-            Throw "Module does not exist at the specified location [$moduleAppDeployToolkitMain]."
-        }
-        If ($DisableLogging) {
-            . $moduleAppDeployToolkitMain -DisableLogging
-        }
-        Else {
-            . $moduleAppDeployToolkitMain
-        }
-    }
-    Catch {
-        If ($mainExitCode -eq 0) {
-            [Int32]$mainExitCode = 60008
-        }
-        Write-Error -Message "Module [$moduleAppDeployToolkitMain] failed to load: `n$($_.Exception.Message)`n `n$($_.InvocationInfo.PositionMessage)" -ErrorAction 'Continue'
-        ## Exit the script, returning the exit code to SCCM
-        If (Test-Path -LiteralPath 'variable:HostInvocation') {
-            $script:ExitCode = $mainExitCode; Exit
-        }
-        Else {
-            Exit $mainExitCode
-        }
-    }
+	## Dot source the required App Deploy Toolkit Functions
+	Try {
+		[string]$moduleAppDeployToolkitMain = "$scriptDirectory\AppDeployToolkit\AppDeployToolkitMain.ps1"
+		If (-not (Test-Path -LiteralPath $moduleAppDeployToolkitMain -PathType 'Leaf')) { Throw "Module does not exist at the specified location [$moduleAppDeployToolkitMain]." }
+		If ($DisableLogging) { . $moduleAppDeployToolkitMain -DisableLogging } Else { . $moduleAppDeployToolkitMain }
+	}
+	Catch {
+		If ($mainExitCode -eq 0){ [int32]$mainExitCode = 60008 }
+		Write-Error -Message "Module [$moduleAppDeployToolkitMain] failed to load: `n$($_.Exception.Message)`n `n$($_.InvocationInfo.PositionMessage)" -ErrorAction 'Continue'
+		## Exit the script, returning the exit code to SCCM
+		If (Test-Path -LiteralPath 'variable:HostInvocation') { $script:ExitCode = $mainExitCode; Exit } Else { Exit $mainExitCode }
+	}
 
-    #endregion
-    ##* Do not modify section above
-    ##*===============================================
-    ##* END VARIABLE DECLARATION
-    ##*===============================================
+	#endregion
+	##* Do not modify section above
+	##*===============================================
+	##* END VARIABLE DECLARATION
+	##*===============================================
 
-    If ($deploymentType -ine 'Uninstall' -and $deploymentType -ine 'Repair') {
-        ##*===============================================
-        ##* PRE-INSTALLATION
-        ##*===============================================
-        [String]$installPhase = 'Pre-Installation'
+	If ($deploymentType -ine 'Uninstall' -and $deploymentType -ine 'Repair') {
+		##*===============================================
+		##* PRE-INSTALLATION
+		##*===============================================
+		[string]$installPhase = 'Pre-Installation'
 
-        ## Show Welcome Message, close Internet Explorer if required, allow up to 3 deferrals, verify there is enough disk space to complete the install, and persist the prompt
-        Show-InstallationWelcome -CloseApps 'acrobat,acrocef,acrodist,acrotray,adobe audition cc,adobe cef helper,adobe desktop service,adobe qt32 server,adobearm,adobecollabsync,adobegcclient,adobeipcbroker,adobeupdateservice,afterfx,agsservice,animate,armsvc,cclibrary,ccxprocess,cephtmlengine,coresync,creative cloud,dynamiclinkmanager,illustrator,indesign,node,pdapp,photoshop,firefox,chrome,excel,groove,iexplore,infopath,lync,onedrive,onenote,onenotem,outlook,mspub,powerpnt,winword,winproj,visio' -CheckDiskSpace -PersistPrompt
+		## Show Welcome Message, close Internet Explorer if required, allow up to 3 deferrals, verify there is enough disk space to complete the install, and persist the prompt
+		Show-InstallationWelcome -CloseApps 'acrobat,acrocef,acrodist,acrotray,adobe audition cc,adobe cef helper,adobe desktop service,adobe qt32 server,adobearm,adobecollabsync,adobegcclient,adobeipcbroker,adobeupdateservice,afterfx,agsservice,animate,armsvc,cclibrary,ccxprocess,cephtmlengine,coresync,creative cloud,dynamiclinkmanager,illustrator,indesign,node,pdapp,photoshop,firefox,chrome,excel,groove,iexplore,infopath,lync,onedrive,onenote,onenotem,outlook,mspub,powerpnt,winword,winproj,visio' -CheckDiskSpace -PersistPrompt
 
-        ## Show Progress Message (with the default message)
-        Show-InstallationProgress
+		## Show Progress Message (with the default message)
+		Show-InstallationProgress
 
-        ## <Perform Pre-Installation tasks here>
-        $applicationList = 'Premiere Pro','Creative Cloud'
+		## <Perform Pre-Installation tasks here>
+		## This essentially replaces the functionality of Creative Cloud Packager. It even uses the same xml file as Creative Cloud Packager to perform the uninstall.
+		$applicationList = 'XD','Creative Cloud'
 		ForEach($installedApplication in $applicationList) {
 			$installedApplicationList = Get-InstalledApplication -Name $installedApplication
 			ForEach($application in $installedApplicationList) {
@@ -225,31 +203,43 @@ Try {
 				}
 			}
 		}
-        ##*===============================================
-        ##* INSTALLATION
-        ##*===============================================
-        [String]$installPhase = 'Installation'
 
-        ## Handle Zero-Config MSI Installations
-        If ($useDefaultMsi) {
-            [Hashtable]$ExecuteDefaultMSISplat = @{ Action = 'Install'; Path = $defaultMsiFile }; If ($defaultMstFile) {
-                $ExecuteDefaultMSISplat.Add('Transform', $defaultMstFile)
-            }
-            Execute-MSI @ExecuteDefaultMSISplat; If ($defaultMspFiles) {
-                $defaultMspFiles | ForEach-Object { Execute-MSI -Action 'Patch' -Path $_ }
-            }
-        }
+		## This is the old way of doing it. Adobe is no longer continuing development and maintenance of Creative Cloud Packager and
+		## recommends that you do not continue using Creative Cloud Packager to uninstall Creative Cloud apps.
+		<#
+		Remove-File -Path "$envCommonProgramFilesX86\Adobe\OOBE\PDApp\*" -Recurse -ContinueOnError $true
+		If (-not ($envOSVersion -like "10.0*")) {
+			Install-MSUpdates -Directory "$dirSupportFiles\$envOSVersionMajor.$envOSVersionMinor"
+		}
+				$exitCode = Execute-Process -Path "$dirSupportFiles\Uninstall\AdobeCCUninstaller.exe" -WindowStyle "Hidden" -IgnoreExitCodes '33,135' -PassThru
+				If (($exitCode.ExitCode -ne "0") -and ($mainExitCode -ne "3010")) { $mainExitCode = $exitCode.ExitCode }
+		#>
 
-        ## <Perform Installation tasks here>
-        $exitCode = Execute-Process -Path "$dirFiles\Build\setup.exe" -Parameters "--silent --INSTALLLANGUAGE=en_US" -WindowStyle "Hidden" -PassThru
-	    If (($exitCode.ExitCode -ne "0") -and ($mainExitCode -ne "3010")) { $mainExitCode = $exitCode.ExitCode }
+		##*===============================================
+		##* INSTALLATION
+		##*===============================================
+		[string]$installPhase = 'Installation'
 
-        ##*===============================================
-        ##* POST-INSTALLATION
-        ##*===============================================
-        [String]$installPhase = 'Post-Installation'
+		## Handle Zero-Config MSI Installations
+		If ($useDefaultMsi) {
+			[hashtable]$ExecuteDefaultMSISplat =  @{ Action = 'Install'; Path = $defaultMsiFile }; If ($defaultMstFile) { $ExecuteDefaultMSISplat.Add('Transform', $defaultMstFile) }
+			Execute-MSI @ExecuteDefaultMSISplat; If ($defaultMspFiles) { $defaultMspFiles | ForEach-Object { Execute-MSI -Action 'Patch' -Path $_ } }
+		}
 
-        ## <Perform Post-Installation tasks here>
+		## <Perform Installation tasks here>
+
+		$exitCode = Execute-Process -Path "$dirFiles\Build\setup.exe" -Parameters "--silent --INSTALLLANGUAGE=en_US" -WindowStyle "Hidden" -PassThru
+		If (($exitCode.ExitCode -ne "0") -and ($mainExitCode -ne "3010")) { $mainExitCode = $exitCode.ExitCode }
+
+
+		##*===============================================
+		##* POST-INSTALLATION
+		##*===============================================
+		[string]$installPhase = 'Post-Installation'
+
+		## <Perform Post-Installation tasks here>
+
+		#Fix Adobe's garbage installer if it kills explorer
         $ProcessActive = Get-Process explorer -ErrorAction SilentlyContinue
         if(!$ProcessActive){
             Execute-ProcessAsUser -Path "$envSystemRoot\explorer.exe"
@@ -260,115 +250,117 @@ Try {
         }
 
 		Execute-Process -Path "$envCommonProgramFilesX86\Adobe\OOBE_Enterprise\RemoteUpdateManager\RemoteUpdateManager.exe" -WindowStyle "Hidden" -PassThru -IgnoreExitCodes '1'
-
-		If(Test-Path "$env:Public\Desktop\Adobe Creative Cloud.lnk") {
+	  	If(Test-Path "$env:Public\Desktop\Adobe Creative Cloud.lnk") {
 			Remove-Item -Path "$env:Public\Desktop\Adobe Creative Cloud.lnk" -Force
 		}
 		Else {
 			Write-Log -Message "Shortcut not detected." -Source 'Post-Installation' -LogType 'CMTrace'
 		}
-        ## Display a message at the end of the install
-        ## See original PSADT Deploy-Application.ps1 file from GitHub if you want to use this feature
-    }
-    ElseIf ($deploymentType -ieq 'Uninstall') {
-        ##*===============================================
-        ##* PRE-UNINSTALLATION
-        ##*===============================================
-        [String]$installPhase = 'Pre-Uninstallation'
 
-        ## Show Welcome Message, close Internet Explorer with a 60 second countdown before automatically closing
-        Show-InstallationWelcome -CloseApps 'acrobat,acrocef,acrodist,acrotray,adobe audition cc,adobe cef helper,adobe desktop service,adobe qt32 server,adobearm,adobecollabsync,adobegcclient,adobeipcbroker,adobeupdateservice,afterfx,agsservice,animate,armsvc,cclibrary,ccxprocess,cephtmlengine,coresync,creative cloud,dynamiclinkmanager,illustrator,indesign,node,pdapp,photoshop,firefox,chrome,excel,groove,iexplore,infopath,lync,onedrive,onenote,onenotem,outlook,mspub,powerpnt,winword,winproj,visio' -CloseAppsCountdown 60
+		## Display a message at the end of the install
+		If (-not $useDefaultMsi) {}
+	}
+	ElseIf ($deploymentType -ieq 'Uninstall')
+	{
+		##*===============================================
+		##* PRE-UNINSTALLATION
+		##*===============================================
+		[string]$installPhase = 'Pre-Uninstallation'
 
-        ## Show Progress Message (with the default message)
-        Show-InstallationProgress
-
-        ## <Perform Pre-Uninstallation tasks here>
+		## Show Welcome Message, close Internet Explorer with a 60 second countdown before automatically closing
+		Show-InstallationWelcome -CloseApps 'acrobat,acrocef,acrodist,acrotray,adobe audition cc,adobe cef helper,adobe desktop service,adobe qt32 server,adobearm,adobecollabsync,adobegcclient,adobeipcbroker,adobeupdateservice,afterfx,agsservice,animate,armsvc,cclibrary,ccxprocess,cephtmlengine,coresync,creative cloud,dynamiclinkmanager,illustrator,indesign,node,pdapp,photoshop,firefox,chrome,excel,groove,iexplore,infopath,lync,onedrive,onenote,onenotem,outlook,mspub,powerpnt,winword,winproj,visio' -CloseAppsCountdown 60
 
 
-        ##*===============================================
-        ##* UNINSTALLATION
-        ##*===============================================
-        [String]$installPhase = 'Uninstallation'
+		## Show Progress Message (with the default message)
+		Show-InstallationProgress
 
-        ## Handle Zero-Config MSI Uninstallations
-        If ($useDefaultMsi) {
-            [Hashtable]$ExecuteDefaultMSISplat = @{ Action = 'Uninstall'; Path = $defaultMsiFile }; If ($defaultMstFile) {
-                $ExecuteDefaultMSISplat.Add('Transform', $defaultMstFile)
-            }
-            Execute-MSI @ExecuteDefaultMSISplat
-        }
+		## <Perform Pre-Uninstallation tasks here>
 
-        ## <Perform Uninstallation tasks here>
-        $exitCode = Execute-Process -Path "MsiExec.exe" -Parameters "/x{3EF1E389-9625-4511-A80F-074F639F8FDF} /q" -WindowStyle "Hidden" -PassThru
+
+		##*===============================================
+		##* UNINSTALLATION
+		##*===============================================
+		[string]$installPhase = 'Uninstallation'
+
+		## Handle Zero-Config MSI Uninstallations
+		If ($useDefaultMsi) {
+			[hashtable]$ExecuteDefaultMSISplat =  @{ Action = 'Uninstall'; Path = $defaultMsiFile }; If ($defaultMstFile) { $ExecuteDefaultMSISplat.Add('Transform', $defaultMstFile) }
+			Execute-MSI @ExecuteDefaultMSISplat
+		}
+
+		# <Perform Uninstallation tasks here>
+		$exitCode = Execute-Process -Path "MsiExec.exe" -Parameters "/x{3EF1E389-9625-4511-A80F-074F639F8FDF} /q" -WindowStyle "Hidden" -PassThru
 		If (($exitCode.ExitCode -ne "0") -and ($mainExitCode -ne "3010")) { $mainExitCode = $exitCode.ExitCode }
 
-        ##*===============================================
-        ##* POST-UNINSTALLATION
-        ##*===============================================
-        [String]$installPhase = 'Post-Uninstallation'
 
-        ## <Perform Post-Uninstallation tasks here>
+		## Adobe is no longer continuing development and maintenance of Creative Cloud Packager and recommends that you do not continue using Creative Cloud Packager to uninstall Creative Cloud apps.
+		<#
+		$exitCode = Execute-Process -Path "$dirSupportFiles\Uninstall\AdobeCCUninstaller.exe" -WindowStyle "Hidden" -IgnoreExitCodes '33,135' -PassThru
+		Start-Sleep -s 10
+		If (($exitCode.ExitCode -ne "0") -and ($mainExitCode -ne "3010")) { $mainExitCode = $exitCode.ExitCode }
+		#>
+
+		##*===============================================
+		##* POST-UNINSTALLATION
+		##*===============================================
+		[string]$installPhase = 'Post-Uninstallation'
+
+		## <Perform Post-Uninstallation tasks here>
+
+	}
+	ElseIf ($deploymentType -ieq 'Repair')
+	{
+		##*===============================================
+		##* PRE-REPAIR
+		##*===============================================
+		[string]$installPhase = 'Pre-Repair'
+
+		## Show Progress Message (with the default message)
+		Show-InstallationProgress
+
+		## <Perform Pre-Repair tasks here>
+
+		##*===============================================
+		##* REPAIR
+		##*===============================================
+		[string]$installPhase = 'Repair'
+
+		## Handle Zero-Config MSI Repairs
+		If ($useDefaultMsi) {
+			[hashtable]$ExecuteDefaultMSISplat =  @{ Action = 'Repair'; Path = $defaultMsiFile; }; If ($defaultMstFile) { $ExecuteDefaultMSISplat.Add('Transform', $defaultMstFile) }
+			Execute-MSI @ExecuteDefaultMSISplat
+		}
+		# <Perform Repair tasks here>
+
+		##*===============================================
+		##* POST-REPAIR
+		##*===============================================
+		[string]$installPhase = 'Post-Repair'
+
+		## <Perform Post-Repair tasks here>
 
 
     }
-    ElseIf ($deploymentType -ieq 'Repair') {
-        ##*===============================================
-        ##* PRE-REPAIR
-        ##*===============================================
-        [String]$installPhase = 'Pre-Repair'
+	##*===============================================
+	##* END SCRIPT BODY
+	##*===============================================
 
-        ## Show Welcome Message, close Internet Explorer with a 60 second countdown before automatically closing
-        Show-InstallationWelcome -CloseApps 'processName' -CloseAppsCountdown 60
-
-        ## Show Progress Message (with the default message)
-        Show-InstallationProgress
-
-        ## <Perform Pre-Repair tasks here>
-
-        ##*===============================================
-        ##* REPAIR
-        ##*===============================================
-        [String]$installPhase = 'Repair'
-
-        ## Handle Zero-Config MSI Repairs
-        If ($useDefaultMsi) {
-            [Hashtable]$ExecuteDefaultMSISplat = @{ Action = 'Repair'; Path = $defaultMsiFile; }; If ($defaultMstFile) {
-                $ExecuteDefaultMSISplat.Add('Transform', $defaultMstFile)
-            }
-            Execute-MSI @ExecuteDefaultMSISplat
-        }
-        ## <Perform Repair tasks here>
-
-        ##*===============================================
-        ##* POST-REPAIR
-        ##*===============================================
-        [String]$installPhase = 'Post-Repair'
-
-        ## <Perform Post-Repair tasks here>
-
-
-    }
-    ##*===============================================
-    ##* END SCRIPT BODY
-    ##*===============================================
-
-    ## Call the Exit-Script function to perform final cleanup operations
-    Exit-Script -ExitCode $mainExitCode
+	## Call the Exit-Script function to perform final cleanup operations
+	Exit-Script -ExitCode $mainExitCode
 }
 Catch {
-    [Int32]$mainExitCode = 60001
-    [String]$mainErrorMessage = "$(Resolve-Error)"
-    Write-Log -Message $mainErrorMessage -Severity 3 -Source $deployAppScriptFriendlyName
-    Show-DialogBox -Text $mainErrorMessage -Icon 'Stop'
-    Exit-Script -ExitCode $mainExitCode
+	[int32]$mainExitCode = 60001
+	[string]$mainErrorMessage = "$(Resolve-Error)"
+	Write-Log -Message $mainErrorMessage -Severity 3 -Source $deployAppScriptFriendlyName
+	Show-DialogBox -Text $mainErrorMessage -Icon 'Stop'
+	Exit-Script -ExitCode $mainExitCode
 }
-
 
 # SIG # Begin signature block
 # MIImVAYJKoZIhvcNAQcCoIImRTCCJkECAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAAhp4uX4mic/c7
-# VnLZEgmvavHwxhn56aUIPf3lLTL+IqCCH8AwggVvMIIEV6ADAgECAhBI/JO0YFWU
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCJFW9b4kSGrWW1
+# ZUfu9C9zM+IZGVBTeEnRJklbWXouPqCCH8AwggVvMIIEV6ADAgECAhBI/JO0YFWU
 # jTanyYqJ1pQWMA0GCSqGSIb3DQEBDAUAMHsxCzAJBgNVBAYTAkdCMRswGQYDVQQI
 # DBJHcmVhdGVyIE1hbmNoZXN0ZXIxEDAOBgNVBAcMB1NhbGZvcmQxGjAYBgNVBAoM
 # EUNvbW9kbyBDQSBMaW1pdGVkMSEwHwYDVQQDDBhBQUEgQ2VydGlmaWNhdGUgU2Vy
@@ -542,32 +534,32 @@ Catch {
 # MSswKQYDVQQDEyJTZWN0aWdvIFB1YmxpYyBDb2RlIFNpZ25pbmcgQ0EgUjM2AhEA
 # pU3fcPvc8UxUgrjysXLKMTANBglghkgBZQMEAgEFAKCBhDAYBgorBgEEAYI3AgEM
 # MQowCKACgAChAoAAMBkGCSqGSIb3DQEJAzEMBgorBgEEAYI3AgEEMBwGCisGAQQB
-# gjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCDpMvE0zvzaohT+
-# UzPgsWKrZg4rq51Q6Zj4m2kfknSNRTANBgkqhkiG9w0BAQEFAASCAYClQcfwabS5
-# QrYly96a9TbiakEciwzDUiq36s7nGddXmKqON1y4yeASJMvUw0qUjSH9QnsGVVnA
-# bAUOUwMT4PU6N+PaxqYXoqbIjvKgK/0spTtg7Btoyl7qhweJRIXD3FOIau6s8oWc
-# fQCexKqQ1DH2WtMKi/fSXNhzBC+/FaYuYyJbiPl26Lk1WVd3c1iBWRgGTcov7gYA
-# bDVbzgzf/eVzAvapHyx4l3zrYsGgBSzOHOObCSEa7QbVaClJplWOlBKlPKN6dahM
-# EhC3tv7j4iFf9/BWGIKW4R352MFwYDe3UoOpJdnLBPltSLwIEu0Ggx8iat/r+t1a
-# 20dKAwyCUG26tiakzT7v/DHOhcVGd6g9dRqbkzFM6kL5LPM1/QcdX1sWH4pW+DTk
-# 4NRhuKnu85jlYZagErjv4zgnzop0XPulFjMzU0Ldl2QJwSSuHqeTp5LUSthNidsx
-# iEH1f1lCwc0rwFzR5CyJfxaIyVmGKJ3M/CX0RuLHKM0mczk43xz5LJGhggNLMIID
+# gjcCAQsxDjAMBgorBgEEAYI3AgEVMC8GCSqGSIb3DQEJBDEiBCClSLyK9AGrhje6
+# XG/KfQja8SCiQXPy23EkmbWpz6dyYDANBgkqhkiG9w0BAQEFAASCAYB/g21P0v9+
+# kOnthzMXcn8WJOEi3HSj+C0pG5UTDSwRnVz6xM/WdCmpY+IlhXZ0nc/qI7VUEbLf
+# Urb+M/6x2dzML/VrKsUNiRSsS/sNvqJPP4EAkVdaQXjwk2PEqfNw/ZmXo15msk2H
+# Mp7yqKxS8qurFI433P6IiyRHVju7qgMXVy9PYCypLfzVIVYA2xTc1EBTpeowyr1T
+# ra+oR0RIqyngjMV/RG3dLPOryVFNpRte+0A5Zn2X8Fh3nsPkypQVvTp4Sr1AI3Ym
+# 5FeDEzH+3dQXjkl4FIsn5oGNd4PVEh+MmpST3EzO3bvNMhbrRA3ZF3bdZ+jWEnDK
+# GYD30y81i1zdCqDiwOXZ0tiCmMqUNNq0ydI7MlHqR36pnAIe1smQni1yCbi/P8zI
+# tERbpyZp4Z0h5coVMEaMmGNm50YElvcQ01LXu8eRVDmrjuWfwJhWuJF6m1s5IFLv
+# jyy9VKleTFN18/UZUeoQmxIEk5/VkiF29/F8R9d+AiAlRJZ2UyCm2PGhggNLMIID
 # RwYJKoZIhvcNAQkGMYIDODCCAzQCAQEwgZEwfTELMAkGA1UEBhMCR0IxGzAZBgNV
 # BAgTEkdyZWF0ZXIgTWFuY2hlc3RlcjEQMA4GA1UEBxMHU2FsZm9yZDEYMBYGA1UE
 # ChMPU2VjdGlnbyBMaW1pdGVkMSUwIwYDVQQDExxTZWN0aWdvIFJTQSBUaW1lIFN0
 # YW1waW5nIENBAhA5TCXhfKBtJ6hl4jvZHSLUMA0GCWCGSAFlAwQCAgUAoHkwGAYJ
-# KoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUxDxcNMjMwOTA1MjIx
-# NTEwWjA/BgkqhkiG9w0BCQQxMgQwBCevHCQIs2raLkJEjqalIAJxfKKwqeN7BUxT
-# Z2UWrsHVr5JHw5nkxyiDu8Cfn831MA0GCSqGSIb3DQEBAQUABIICAHlOIXwt6xC5
-# r7biYACU+9CongAmCUap+6APA5ZMmfTbL+fpX7BfyECqmOqytqYiVCBfwL5wm+ee
-# nxi24yISYD24a9mrpDgrnKZ7Jry7+falDf1lqdX6SYY9e+VotC1/F6JQQW72/Lo3
-# lEKJnC+kSYd37peYgACxdrNu8711GA5Q9mFGYaPH70QDZAQ5SJUNoq2weoUdloXu
-# nJAQY2D1HLErSAUzbvgz7tmKU+FFq9eBR+oQEt4mWB0eiFAjIGCXyd7t2mLS5qSe
-# YlUzuBHBXtADSCUQajezIKy6SdJtxl0Zo7pIWZv1phUNF9PAvPdNITDRzrTndh0N
-# H4XyU7fIwzBNdX4SGatMQoS90SzkF80chFB8kRiQ8whX9/9kqVMk0feB8apapi/x
-# nuCplEl5QiIqEbOuqppQQAVtd/7QK/MTJ4iwvj3vMGURlI4OXIhzAKNoScRh+pL+
-# WJLBLieBY3EIpuqIDwBph2B0LO3Y9Sj9/jllYwMpfaxH2E7Ad8uUwrQ3TODps3cw
-# 5wyjRWa15wg17EMqPV40DuaUsPNliwYG+iNWZilaqlG/9eXPNIaTBVlBczSdfq/7
-# l566t4tmD4yeP96ZS1t3BgFY74EANDmMTwPQ64+Mf03NDUAzu6bwIXEEG/kWD6kj
-# +/SbmMOHDVC5+g2/n5/I3B2oIYCNEII8
+# KoZIhvcNAQkDMQsGCSqGSIb3DQEHATAcBgkqhkiG9w0BCQUxDxcNMjMwOTA2MTYz
+# NDM0WjA/BgkqhkiG9w0BCQQxMgQw82VSA4m+HxaIxsCRumHlo8rlFVoOQiw6Rs/S
+# kiSGHBMKN0pmhS/NMZ/+QF8fMMBFMA0GCSqGSIb3DQEBAQUABIICAGTGCsz4Ath0
+# HkK30luKhXNLDNJOrOj41XGlQr9XOZ/W9rdmTWI1SEGMJxu+1j2zKDfYMajwWO8S
+# wQCFJIrTui3ARauQ7+jbBnknue845yIIVZx592LCYAdEU97qY2thqpYu+hwGdyNF
+# rYdI2uwjdLvOA/MgWhq9Y+6OX4NLqtUry6pJt/gifeBSjdZQZaxStlzFticmiFhT
+# 9A0jP1UHrXON/5wlzfRMQPyub2z855iWmEDvAP0V0tdAWL4PSF7iyS/q6dUGxBCi
+# pFzUsmmhJAdDmVwK2rkvSjqx4WNJ9OrdRNnGHkGohOJRM+Hw3gSqDmkeHN4j2NuK
+# QHFL0qeJloXf1mKC0eZYdhBqzHU92rVr6EvQLHcMPws8LZ0zo4B0knaxYOEwY7IC
+# 4huSiFUqYQ/cEJuHy7fG4bY4Fh00Mrdg2GZwJvrsH/Z1coCe1gm8heuOePGNaidr
+# Fz3fDzTbgxjxVYd1AIPnPs527BC33MB5VRzKwGK3FKpWotioVUUMeI/aVa1UiOVf
+# MfEn8LVhpjYCEq/b2afKvdY4o80GjacQlQruhyRSvVhpW8/4JJiNL9zZ9wH3/PQv
+# TJCVX1xahlfI6Us27/sLJm5dIgufzgRxW51DxuDpEt+7w8/yBGCvribFfOVgQ+8L
+# znXulavpY9RHkQPwLGF+4m19xemycgOc
 # SIG # End signature block
